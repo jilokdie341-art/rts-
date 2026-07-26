@@ -1,4 +1,4 @@
-const CACHE_NAME = 'iron-front-rts-v1';
+const CACHE_NAME = 'iron-front-rts-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -23,18 +23,16 @@ self.addEventListener('activate', (e) => {
   self.clients.claim();
 });
 
+// 네트워크 우선: 항상 최신 버전을 먼저 시도하고, 인터넷이 안 될 때만 저장된 캐시를 사용
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
   e.respondWith(
-    caches.match(e.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(e.request)
-        .then((res) => {
-          const clone = res.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(e.request, clone));
-          return res;
-        })
-        .catch(() => cached);
-    })
+    fetch(e.request)
+      .then((res) => {
+        const clone = res.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(e.request, clone));
+        return res;
+      })
+      .catch(() => caches.match(e.request))
   );
 });
