@@ -2054,6 +2054,13 @@ function triggerMissionDefeat(msg){
 function spawnRescueStage(idx){
   const def = rescueStageDefs[idx];
   if(!def) return;
+  if(unlockedHeroines.some(h=>h.name===def.name)){
+    // 이미 지난 매치에서 구출해 영구 보유 중인 영웅은 중복 등장시키지 않고 건너뜀
+    rescueTargets.push({id:null, name:def.name, rescued:true, lost:false});
+    log(`✅ ${def.name}은(는) 이미 합류한 상태라 이번 작전에서는 건너뜁니다.`,'player');
+    advanceRescueStage();
+    return;
+  }
   const rx = def.ax + (Math.random()*140-70), ry = def.ay + (Math.random()*140-70);
   const hostage = makeUnit('hero','player', rx, ry);
   hostage.hp=55; hostage.maxHp=55; hostage.dmg=1; hostage.def=1;
