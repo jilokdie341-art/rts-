@@ -4,14 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>졸라맨 국가전략전</title>
-<link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#0a0e14">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="국가전략전">
-<link rel="icon" href="icon-192.png">
-<link rel="apple-touch-icon" href="icon-192.png">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
   :root{
@@ -780,6 +772,7 @@ let missionMode = 'skirmish'; // 'skirmish' | 'defense' | 'rescue' | 'escort' | 
 const DEFENSE_DURATION = 480;
 let rescueTargets = []; // [{id, name, rescued, lost}]
 let tutorialStep = 0, tutorialInitialWorkers = 0, tutorialDummyId = null;
+let unlockedHeroines = []; // [{name, abilityKey, abilityName, desc}] - 구출 성공 시 이 세션 내내 영구 보유, 모든 미션에서 함께 시작
 const TUTORIAL_STEPS = [
   { text:'드래그로 화면에 보이는 공병(일꾼)들을 선택해보세요.', check: ()=> selection.some(u=>u.kind==='unit'&&u.role==='worker') },
   { text:'선택한 공병으로 근처 금색 원(광산)을 우클릭해서 채집을 보내보세요.', check: ()=> entities.some(u=>u.team==='player'&&u.role==='worker'&&!u.dead&&u.gatherState) },
@@ -1022,6 +1015,15 @@ function applyResearchEffectToExisting(id, team){
 }
 
 function dist(a,b){ return Math.hypot(a.x-b.x,a.y-b.y); }
+function findNearestMine(from, exclude){
+  let best=null, bestD=Infinity;
+  for(const m of mines){
+    if(m.amount<=0 || m===exclude) continue;
+    const d = dist(from,m);
+    if(d<bestD){ bestD=d; best=m; }
+  }
+  return best;
+}
 function mod(n,m){ return ((n%m)+m)%m; }
 
 function makeUnit(role, team, x, y){
@@ -1247,6 +1249,20 @@ function setupMap(){
     dummy.hp=40; dummy.maxHp=40; dummy.dmg=0; dummy.speed=0; dummy.name='훈련 인형';
     entities.push(dummy);
     tutorialDummyId = dummy.id;
+  }
+  spawnUnlockedHeroines(pBaseX, pBaseY);
+}
+function spawnUnlockedHeroines(pBaseX, pBaseY){
+  let i = 0;
+  for(const h of unlockedHeroines){
+    const ang = (Math.PI*2/Math.max(1,unlockedHeroines.length))*i + Math.PI*0.3;
+    const hx = pBaseX + Math.cos(ang)*90, hy = pBaseY + Math.sin(ang)*90;
+    const u = makeUnit('hero','player', hx, hy);
+    u.hp=240; u.maxHp=240; u.dmg=11; u.def=7; u.range=62; u.speed=60;
+    u.name = `${h.name} (아군 영웅)`; u.gender='female'; u.isHeroine=true;
+    u.ability = h.abilityKey; u.abilityName = h.abilityName; u.abilityDesc = (h.desc||'주변 아군을 지원합니다') + ' (구출된 영웅)';
+    entities.push(u);
+    i++;
   }
 }
 
@@ -1793,8 +1809,18 @@ function updateUnit(u, dt){
   } else if(u.gatherState==='toBase'){
     if(u.dropoff && dist(u,u.dropoff) < u.dropoff.radius+14){
       teams[u.team].gold += u.carrying; u.carrying=0;
-      if(u.mineTarget.amount>0){ u.gatherState='toMine'; u.moveTarget={x:u.mineTarget.x+(Math.random()*20-10),y:u.mineTarget.y+(Math.random()*20-10)}; }
-      else { u.gatherState=null; u.mineTarget=null; }
+      if(u.mineTarget.amount>0){
+        u.gatherState='toMine'; u.moveTarget={x:u.mineTarget.x+(Math.random()*20-10),y:u.mineTarget.y+(Math.random()*20-10)};
+      } else {
+        const nextMine = findNearestMine(u, u.mineTarget);
+        if(nextMine){
+          u.mineTarget = nextMine;
+          u.gatherState='toMine'; u.moveTarget={x:nextMine.x+(Math.random()*20-10),y:nextMine.y+(Math.random()*20-10)};
+          if(u.team==='player') log('⛏ 광산이 고갈되어 가까운 다른 광산으로 이동합니다.','player');
+        } else {
+          u.gatherState=null; u.mineTarget=null;
+        }
+      }
     }
   }
 
@@ -2103,6 +2129,14 @@ function checkMissionObjectives(){
         hostage.abilityName = hostage._joinAbilityName || '지원군 합류';
         hostage.abilityDesc = (hostage._joinDesc || '주변 아군을 지원합니다') + ' (구출된 영웅)';
         teams.player.gold += 100;
+        if(!unlockedHeroines.some(h=>h.name===rt.name)){
+          unlockedHeroines.push({
+            name: rt.name,
+            abilityKey: hostage.ability,
+            abilityName: hostage.abilityName,
+            desc: hostage._joinDesc || '주변 아군을 지원합니다',
+          });
+        }
         particles.push({x:hostage.x,y:hostage.y-30,life:1.3,txt:'RESCUED!',color:'#ffd24f'});
         log(`🎉 ${rt.name}을(를) 무사히 구출했습니다! 아군 영웅으로 합류하고 골드 100을 획득했습니다. (스테이지 ${rescueStage+1}/${rescueStageDefs.length} 완료)`,'player');
         advanceRescueStage();
@@ -2680,7 +2714,30 @@ function drawStickman(u){
     ctx.beginPath(); ctx.arc(u.x,u.y,SHIELD_PROTECT_RADIUS,0,7);
     ctx.strokeStyle=rgbaOf(u.accent||teamCol,0.18); ctx.lineWidth=1; ctx.setLineDash([3,5]); ctx.stroke(); ctx.setLineDash([]);
   }
-  if(u.carrying>0){ ctx.fillStyle='#e8b339'; ctx.beginPath(); ctx.arc(u.x,u.y-u.radius-6,3,0,7); ctx.fill(); }
+  if(u.carrying>0){
+    const bob = Math.sin(elapsed*6)*1.2;
+    const sackX = u.x - u.radius*0.55, sackY = u.y - u.radius*0.35 + bob;
+    ctx.save();
+    // 자루(포대)
+    ctx.beginPath();
+    ctx.moveTo(sackX-4, sackY-3);
+    ctx.quadraticCurveTo(sackX-6, sackY+3, sackX-3, sackY+6);
+    ctx.quadraticCurveTo(sackX, sackY+8, sackX+3, sackY+6);
+    ctx.quadraticCurveTo(sackX+6, sackY+3, sackX+4, sackY-3);
+    ctx.closePath();
+    ctx.fillStyle='#a0784a'; ctx.fill();
+    ctx.strokeStyle='#6b4d2c'; ctx.lineWidth=1; ctx.stroke();
+    // 자루 입구 묶음
+    ctx.beginPath(); ctx.moveTo(sackX-3.5,sackY-3); ctx.lineTo(sackX+3.5,sackY-3); ctx.stroke();
+    // 반짝이는 금화
+    ctx.fillStyle='#ffd24f';
+    ctx.beginPath(); ctx.arc(sackX, sackY+1.5, 2.2, 0, 7); ctx.fill();
+    ctx.strokeStyle='#a8791f'; ctx.lineWidth=0.6; ctx.stroke();
+    ctx.restore();
+    // 위쪽에 획득량 표시
+    ctx.fillStyle='#ffd24f'; ctx.font='bold 8px JetBrains Mono'; ctx.textAlign='center';
+    ctx.fillText(`+${u.carrying}`, u.x, u.y-u.radius-9);
+  }
   if(u.repairTarget){
     ctx.strokeStyle='#3fd4c0'; ctx.lineWidth=2; ctx.lineCap='round';
     const rx=u.x, ry=u.y-u.radius-8;
@@ -3213,13 +3270,6 @@ document.getElementById('btnReturnMenu').onclick = ()=>{
 };
 
 })();
-</script>
-<script>
-if('serviceWorker' in navigator){
-  window.addEventListener('load', ()=>{
-    navigator.serviceWorker.register('service-worker.js').catch(()=>{});
-  });
-}
 </script>
 </body>
 </html>
