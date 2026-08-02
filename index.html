@@ -264,6 +264,7 @@
         <div id="mpHostStep" style="display:none;">
           <div style="font-size:11px;color:var(--text-dim);margin:8px 0 4px;">① 아래 코드를 복사해서 상대방에게 보내세요</div>
           <textarea id="mpRoomCode" readonly style="width:100%;height:70px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#5fd6ff;background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:8px;box-sizing:border-box;resize:none;" placeholder="생성 중..."></textarea>
+          <div id="mpRoomCodeMeta" style="font-size:9px;color:var(--text-dim);margin-top:3px;text-align:right;"></div>
           <button class="menuBtn" id="mpCopyBtn" style="width:100%;margin-top:6px;">📋 코드 복사</button>
           <div id="mpAnswerStep" style="display:none;margin-top:12px;">
             <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px;">② 상대방이 보내준 응답 코드를 여기 붙여넣으세요</div>
@@ -4816,35 +4817,21 @@ async function mpDecode(str){
 }
 // SDP에서 데이터채널 연결에 불필요한 중복 후보를 정리해 코드를 더 짧게 만듦
 function mpTrimSdp(desc){
+  // 이전에는 후보를 재배치/필터링했는데 실제 브라우저에서 구조가 깨지는 문제가 반복 발생해서,
+  // 원래 순서를 절대 바꾸지 않고 완전히 동일한 중복 줄만 제거하는 안전한 방식으로 변경 (TCP 후보만 최소한으로 제외)
   const lines = desc.sdp.split('\r\n');
-  const candidateLines = [];
-  const otherLines = [];
+  const seen = new Set();
+  const kept = [];
   for(const line of lines){
-    if(line.startsWith('a=candidate')) candidateLines.push(line);
-    else if(line==='a=end-of-candidates') continue; // 후보 재배치 후 맨 끝에 다시 붙임 (순서 꼬임 방지)
-    else otherLines.push(line);
+    if(line.startsWith('a=candidate')){
+      const parts = line.split(' ');
+      if((parts[2]||'').toLowerCase()==='tcp') continue; // TCP 후보는 데이터채널 연결엔 거의 안 쓰이므로 제외
+      if(seen.has(line)) continue; // 완전히 동일한 줄만 중복 제거 (순서/구조는 그대로 유지)
+      seen.add(line);
+    }
+    kept.push(line);
   }
-  // srflx(공인 IP, 서로 다른 네트워크 간 연결에 핵심) 후보를 최우선으로, host는 백업용 최소 1~2개만 남김
-  const srflx = [], host = [], others = [];
-  const seenIp = new Set();
-  for(const line of candidateLines){
-    const parts = line.split(' ');
-    const proto = (parts[2]||'').toLowerCase();
-    const type = parts[7];
-    if(proto==='tcp') continue; // TCP 후보는 거의 안 쓰이므로 통째로 제거
-    const ip = parts[4];
-    if(seenIp.has(ip+':'+type)) continue; // 같은 IP+타입 중복 제거
-    seenIp.add(ip+':'+type);
-    if(type==='srflx') srflx.push(line);
-    else if(type==='host') host.push(line);
-    else others.push(line);
-  }
-  const kept = [...srflx.slice(0,2), ...host.slice(0,2), ...others.slice(0,1)];
-  if(candidateLines.length>0 && kept.length===0){
-    // 예상 못한 형식으로 후보가 전부 걸러졌다면 연결 실패 위험이 있으니 원본 그대로 사용
-    return desc;
-  }
-  return { type: desc.type, sdp: [...otherLines, ...kept, 'a=end-of-candidates'].join('\r\n') };
+  return { type: desc.type, sdp: kept.join('\r\n') };
 }
 function mpWaitIceComplete(pc){
   return new Promise(resolve=>{
@@ -4881,7 +4868,10 @@ async function mpCreateHost(){
     const offer = await mp.pc.createOffer();
     await mp.pc.setLocalDescription(offer);
     await mpWaitIceComplete(mp.pc);
-    document.getElementById('mpRoomCode').value = await mpEncode({sdp:mpTrimSdp(mp.pc.localDescription)});
+    const code = await mpEncode({sdp:mpTrimSdp(mp.pc.localDescription)});
+    document.getElementById('mpRoomCode').value = code;
+    const now = new Date();
+    document.getElementById('mpRoomCodeMeta').textContent = `생성됨 ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')} · 길이 ${code.length}자 · 뒷부분 ...${code.slice(-8)}`;
     document.getElementById('mpStatus').textContent = '코드를 상대방에게 보내고, 상대방이 보낸 응답 코드를 아래에 붙여넣으세요.';
     document.getElementById('mpAnswerStep').style.display='block';
   }catch(e){ console.error(e); document.getElementById('mpStatus').textContent = '❌ 연결 코드 생성 실패: '+e.message+' (이 브라우저는 WebRTC를 지원하지 않을 수 있습니다)'; }
@@ -5086,6 +5076,8 @@ document.getElementById('btnMultiplayer').onclick = ()=>{
   document.getElementById('mpJoinAnswerStep').style.display='none';
   document.getElementById('mpFactionStep').style.display='none';
   document.getElementById('mpStatus').textContent='';
+  document.getElementById('mpRoomCode').value='';
+  document.getElementById('mpRoomCodeMeta').textContent='';
   if(typeof RTCPeerConnection==='undefined'){
     document.getElementById('mpStatus').textContent = '❌ 이 브라우저는 온라인 대전에 필요한 WebRTC를 지원하지 않습니다.';
   }
